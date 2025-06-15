@@ -1,0 +1,58 @@
+# Dipendenze
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build
+dist/
+build/
+*.exe
+*.dmg
+*.app
+*.AppImage
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+logs/
+*.log
+
+# Runtime
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage
+coverage/
+.nyc_output/
+
+# Electron
+app/
+release/
+
+# Ambiente
+.env
+.env.local
+.env.production
+
+# File temporanei
+*.tmp
+*.temp
+
+# File di backup
+*.backup
+*.bak
+
+# Configurazioni locali (mantieni quelle di default)
+settings-local.json
