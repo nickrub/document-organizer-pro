@@ -2,101 +2,106 @@ const fs = require('fs-extra');
 const path = require('path');
 const pdfParse = require('pdf-parse');
 const mime = require('mime-types');
+const OCREngine = require('./ocrEngine');
+const TemplateMatcher = require('./templateMatcher');
 
 class DocumentProcessor {
   constructor() {
-    this.categories = {
-      'IMU': { 
-        keywords: ['imu', 'imposta municipale', 'comune', 'ravvedimento', 'f24', 'tributi', 'ici'], 
-        weight: 1.0,
-        aliases: ['ici', 'imposta comunale']
-      },
-      'TARI': { 
-        keywords: ['tari', 'rifiuti', 'tarsu', 'tariffa rifiuti', 'tassa rifiuti', 'igiene urbana'], 
-        weight: 1.0,
-        aliases: ['tarsu', 'tia']
-      },
-      'Bollette_Energia': { 
-        keywords: ['energia elettrica', 'enel', 'eni', 'edison', 'acea energia', 'kw', 'kwh', 'bolletta luce', 'elettrica'], 
-        weight: 1.0,
-        aliases: ['luce', 'corrente elettrica']
-      },
-      'Bollette_Gas': { 
-        keywords: ['gas', 'metano', 'smc', 'metro cubo', 'bolletta gas', 'eni gas'], 
-        weight: 1.0,
-        aliases: ['gas naturale', 'metano']
-      },
-      'Bollette_Acqua': { 
-        keywords: ['acqua', 'acea', 'acquedotto', 'bolletta acqua', 'idrico', 'servizio idrico'], 
-        weight: 1.0,
-        aliases: ['idrica', 'acquedotto']
-      },
-      'Contratti': { 
-        keywords: ['contratto', 'accordo', 'clausola', 'firma', 'locazione', 'affitto', 'canone'], 
-        weight: 1.0,
-        aliases: ['accordo', 'patto']
-      },
-      'Banca': { 
-        keywords: ['banca', 'conto corrente', 'iban', 'bonifico', 'estratto conto', 'movimento', 'unicredit', 'intesa'], 
-        weight: 1.0,
-        aliases: ['bancario', 'finanziario']
-      },
-      'Assicurazioni': {
-        keywords: ['assicurazione', 'polizza', 'rc auto', 'kasko', 'copertura assicurativa', 'premio'],
-        weight: 1.0,
-        aliases: ['polizza', 'copertura']
-      }
-    };
+    this.ocrEngine = new OCREngine();
+    this.templateMatcher = new TemplateMatcher();
+    this.categories = this.getDefaultCategories();
     
-    console.log('📋 Document Processor inizializzato');
+    console.log('📋 Document Processor Enhanced inizializzato');
   }
 
   async analyzeDocument(filePath) {
     try {
-      console.log(`🔍 Analisi: ${path.basename(filePath)}`);
+      console.log(`🔍 Analisi Enhanced: ${path.basename(filePath)}`);
       
       const mimeType = mime.lookup(filePath);
       let extractedText = '';
+      let ocrData = null;
       let processingMethod = 'unknown';
+      let confidence = 50;
 
+      // FASE 1: Estrazione testo base
       if (mimeType === 'application/pdf') {
         extractedText = await this.extractTextFromPDF(filePath);
         processingMethod = 'PDF parsing';
+        confidence = 70;
       } else if (mimeType && mimeType.startsWith('image/')) {
-        extractedText = await this.analyzeImageByFilename(filePath);
-        processingMethod = 'Analisi filename (immagine)';
+        // NUOVA FUNZIONALITÀ: OCR per immagini
+        try {
+          ocrData = await this.ocrEngine.extractTextFromImage(filePath);
+          extractedText = ocrData.text;
+          processingMethod = 'OCR avanzato';
+          confidence = Math.max(60, ocrData.confidence);
+          console.log(`📸 OCR completato con confidence: ${ocrData.confidence}%`);
+        } catch (ocrError) {
+          console.log('⚠️ OCR fallito, uso analisi filename');
+          extractedText = await this.analyzeImageByFilename(filePath);
+          processingMethod = 'Analisi filename (OCR fallito)';
+          confidence = 40;
+        }
       } else if (mimeType && mimeType.startsWith('text/')) {
         extractedText = await this.extractTextFromFile(filePath);
         processingMethod = 'File di testo';
+        confidence = 80;
       } else {
         extractedText = await this.analyzeImageByFilename(filePath);
-        processingMethod = 'Analisi filename (tipo sconosciuto)';
+        processingMethod = 'Analisi filename';
+        confidence = 30;
       }
 
-      const classification = this.classifyDocument(extractedText, path.basename(filePath));
-      const year = this.extractYear(extractedText, filePath);
-      const metadata = this.extractMetadata(extractedText);
+      // FASE 2: Classificazione base
+      const baseClassification = this.classifyDocument(extractedText, path.basename(filePath));
+      
+      // FASE 3: Template matching (NUOVA FUNZIONALITÀ)
+      const templateMatch = this.templateMatcher.matchTemplate(
+        extractedText, 
+        path.basename(filePath),
+        ocrData?.extractedData
+      );
 
+      // FASE 4: Combinazione risultati
+      let finalClassification = baseClassification;
+      if (templateMatch) {
+        finalClassification = this.templateMatcher.enhanceAnalysis(baseClassification, templateMatch);
+        console.log(`🎯 Template match: ${templateMatch.template} (${templateMatch.company})`);
+      }
+
+      // FASE 5: Estrazione metadata avanzata
+      const metadata = this.extractMetadata(extractedText);
+      if (ocrData?.extractedData) {
+        Object.assign(metadata, ocrData.extractedData);
+      }
+
+      const year = this.extractYear(extractedText, filePath);
+      
       const result = {
         filename: path.basename(filePath),
         fullPath: filePath,
         extractedText: this.sanitizeText(extractedText).substring(0, 500) + (extractedText.length > 500 ? '...' : ''),
-        category: classification.category,
-        confidence: classification.confidence,
-        keywords: classification.keywords,
+        category: finalClassification.category,
+        confidence: finalClassification.confidence,
+        keywords: finalClassification.keywords,
+        company: finalClassification.company || 'Sconosciuta',
+        templateMatched: finalClassification.templateMatched || null,
         year: year,
         metadata: metadata,
         fileSize: (await fs.stat(filePath)).size,
         mimeType: mimeType,
         processingMethod: processingMethod,
+        ocrConfidence: ocrData?.confidence || null,
+        enhancedBy: finalClassification.enhancedBy || 'base_classification',
         analyzedAt: new Date().toISOString()
       };
 
-      console.log(`✅ Analisi completata: ${result.filename} → ${result.category} (${result.confidence}% confidence) via ${processingMethod}`);
+      console.log(`✅ Analisi Enhanced completata: ${result.filename} → ${result.category} (${result.confidence}% confidence) via ${processingMethod}`);
       return result;
 
     } catch (error) {
-      console.error(`❌ Errore analisi ${path.basename(filePath)}:`, error.message);
+      console.error(`❌ Errore analisi enhanced ${path.basename(filePath)}:`, error.message);
       throw new Error(`Errore analisi documento: ${error.message}`);
     }
   }
@@ -105,7 +110,7 @@ class DocumentProcessor {
     try {
       const dataBuffer = await fs.readFile(filePath);
       const data = await pdfParse(dataBuffer, {
-        max: 100,
+        max: 200,
         version: 'v1.10.100'
       });
       
@@ -344,6 +349,65 @@ class DocumentProcessor {
       .trim();
   }
 
+  getDefaultCategories() {
+    return {
+      'IMU': { 
+        keywords: ['imu', 'imposta municipale', 'comune', 'ravvedimento', 'f24'], 
+        folder: 'Tasse/IMU',
+        color: '#FF6B6B',
+        weight: 1.0
+      },
+      'TARI': { 
+        keywords: ['tari', 'rifiuti', 'tarsu', 'tariffa rifiuti'], 
+        folder: 'Tasse/TARI',
+        color: '#4ECDC4',
+        weight: 1.0
+      },
+      'Bollette_Energia': { 
+        keywords: ['energia elettrica', 'enel', 'eni', 'edison', 'kw', 'kwh', 'bolletta luce'], 
+        folder: 'Bollette/Energia_Elettrica',
+        color: '#45B7D1',
+        weight: 1.0
+      },
+      'Bollette_Gas': { 
+        keywords: ['gas', 'metano', 'smc', 'metro cubo', 'bolletta gas'], 
+        folder: 'Bollette/Gas',
+        color: '#F7931E',
+        weight: 1.0
+      },
+      'Bollette_Acqua': { 
+        keywords: ['acqua', 'acea', 'acquedotto', 'bolletta acqua'], 
+        folder: 'Bollette/Acqua',
+        color: '#96CEB4',
+        weight: 1.0
+      },
+      'Bollette_Telefono': {
+        keywords: ['tim', 'vodafone', 'wind', 'tre', 'telefono', 'mobile'],
+        folder: 'Bollette/Telefono',
+        color: '#9B59B6',
+        weight: 1.0
+      },
+      'Contratti': { 
+        keywords: ['contratto', 'accordo', 'clausola', 'firma', 'locazione'], 
+        folder: 'Contratti',
+        color: '#FFEAA7',
+        weight: 1.0
+      },
+      'Banca': { 
+        keywords: ['banca', 'conto corrente', 'iban', 'bonifico', 'estratto conto'], 
+        folder: 'Documenti_Bancari',
+        color: '#DDA0DD',
+        weight: 1.0
+      },
+      'Assicurazioni': {
+        keywords: ['assicurazione', 'polizza', 'rc auto', 'kasko'],
+        folder: 'Assicurazioni',
+        color: '#98D8C8',
+        weight: 1.0
+      }
+    };
+  }
+
   getSupportedFileTypes() {
     return {
       'PDF': {
@@ -353,8 +417,8 @@ class DocumentProcessor {
       },
       'Immagini': {
         extensions: ['.jpg', '.jpeg', '.png', '.gif', '.bmp'],
-        description: 'Immagini con analisi basata su nome file',
-        processing: 'Analisi nome file intelligente'
+        description: 'Immagini con OCR avanzato e analisi nome file',
+        processing: 'OCR Tesseract + analisi intelligente'
       },
       'Testo': {
         extensions: ['.txt', '.rtf'],
@@ -365,7 +429,9 @@ class DocumentProcessor {
   }
 
   async cleanup() {
-    console.log('✅ Document Processor cleanup completato');
+    console.log('✅ Document Processor Enhanced cleanup...');
+    await this.ocrEngine.terminate();
+    console.log('✅ Cleanup completato');
   }
 }
 
